@@ -42,20 +42,43 @@ Later entries are that same forward loss after each learning step.
 
 ## Inference
 
-Inference does not change weights. It initializes activities on the forward
-pass, then runs `T - 1` primal-dual cycles and a final primal step.
+Inference does not change weights. Each iteration is a forward sweep from the
+input to the top hidden layer. In that sweep, layer i writes its activity and
+then updates its multiplier, λ ← λ + α r, before the sweep moves on. The first
+sweep is the feasible initialization (the residual is zero, so λ stays zero).
+The next `T - 1` sweeps are primal-dual. The last sweep is a primal step only.
 
 ```python
 result = net.infer(x, y, T=16, eta_h=0.08, alpha=1.0, rho=1.0)
 result.hiddens       # h_1 .. h_{L-1} after the final primal step
-result.multipliers   # λ_1 .. λ_{L-1} after the last dual step
+result.multipliers   # λ_1 .. λ_{L-1} written by the last dual update inside a forward sweep
 result.residuals     # r_i = h_i - σ(W_i h_{i-1}) at the final activities
 result.prediction    # W_L h_{L-1} using those activities
 result.energy        # batch-mean augmented Lagrangian
 ```
 
 `alpha = 0` freezes the multipliers at zero and recovers finite-inference
-predictive coding. `T = 1` is a single predictive-coding activity step.
+predictive coding. `T = 1` is the initialization sweep plus one primal sweep,
+with no primal-dual sweep in between.
+
+## Equation map
+
+Logged training loss is the feasible readout. It does not carry multipliers.
+During inference the quantities below are computed inside the forward sweep,
+except the weight step, which runs once the sweeps return.
+
+| Quantity | Equation | Where it runs |
+| --- | --- | --- |
+| forward activity | h_i = σ(W_i h_{i-1}), then ŷ = W_L h_{L-1} | forward sweep, input toward the readout |
+| residual | r_i = h_i − σ(W_i h_{i-1}) | that same layer, after h_i is written |
+| combined signal | c_i = λ_i + ρ r_i | activity gradient for the sweep |
+| dual step | λ_i ← λ_i + α r_i | that same layer, before the next layer |
+| primal step | h_i ← h_i − η_h ∇_{h_i} L_ρ | primal sweeps; gradients from the state at the start of the sweep |
+| weight step | W ← W − η_θ ∇_W L_ρ | after inference, using the λ the sweeps wrote |
+
+`alpha = 0` still freezes every multiplier at zero. The initialization sweep
+applies the dual step to a zero residual, and a primal-dual sweep then adds
+α r = 0.
 
 ## Tests
 
@@ -63,7 +86,8 @@ predictive coding. `T = 1` is a single predictive-coding activity step.
 pytest
 ```
 
-The tests check that a primal step descends the augmented Lagrangian, that the  
-dual variable integrates the residual, that linear inference reaches the  
-backprop adjoint of Figure 1, and that a short training run reduces forward loss.
+The tests check that a primal step descends the augmented Lagrangian, that a
+forward sweep integrates each layer's residual into λ, that linear inference
+reaches the backprop adjoint of Figure 1, and that a short training run
+reduces forward loss.
 

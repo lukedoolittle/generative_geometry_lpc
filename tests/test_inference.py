@@ -2,7 +2,13 @@
 
 import numpy as np
 
-from lpc.energy import activity_gradients, augmented_lagrangian, forward_hiddens
+from lpc.energy import (
+    activity_gradients,
+    augmented_lagrangian,
+    forward_hiddens,
+    forward_sweep,
+    layer_residuals,
+)
 from lpc.inference import infer
 from lpc.network import Network
 
@@ -16,7 +22,12 @@ def _scalar_weights():
 
 
 def test_primal_step_with_zero_multiplier_is_predictive_coding():
-    """α = 0 pins λ at 0, and T = 1 never applies a dual update."""
+    """The forward sweep updates λ, but α = 0 or a zero init residual leaves it at 0.
+
+    T = 1 is the feasible initialization sweep plus one primal sweep. The
+    initialization residual is zero, and the primal sweep does not take
+    another dual step, so λ is still 0. α = 0 keeps λ at 0 on later sweeps.
+    """
     net = Network((3, 4, 2), activation="tanh", seed=0, init_scale=0.2)
     rng = np.random.default_rng(1)
     x = rng.normal(size=(5, 3))
@@ -28,24 +39,75 @@ def test_primal_step_with_zero_multiplier_is_predictive_coding():
 
 
 def test_dual_step_accumulates_the_residual():
-    """Equation (12): after the first primal step, λ = α r(h_updated)."""
+    """The forward sweep writes λ ← λ + α r as it commits each layer's activity."""
     weights, x, y = _scalar_weights()
     alpha = 0.4
-    result = infer(
-        weights, x, y, activation="identity", T=2, eta_h=0.05, alpha=alpha, rho=1.0
+    eta_h = 0.05
+    rho = 1.0
+    hiddens, multipliers = forward_sweep(
+        weights,
+        x,
+        "identity",
+        y=y,
+        alpha=alpha,
+        rho=rho,
+        update_multipliers=True,
     )
-    # T = 2 is one primal-dual cycle plus a final primal step, so λ was
-    # written from the residual *before* the final primal step. Re-run the
-    # first cycle explicitly and compare λ.
-    hiddens = forward_hiddens(weights, x, "identity")
-    multipliers = [np.zeros_like(h) for h in hiddens]
-    gradients = activity_gradients(
-        weights, hiddens, multipliers, x, y, rho=1.0, activation="identity"
+    np.testing.assert_allclose(multipliers[0], np.zeros_like(multipliers[0]))
+
+    hiddens, multipliers = forward_sweep(
+        weights,
+        x,
+        "identity",
+        hiddens=hiddens,
+        multipliers=multipliers,
+        y=y,
+        eta_h=eta_h,
+        alpha=alpha,
+        rho=rho,
+        update_activities=True,
+        update_multipliers=True,
     )
-    hiddens = [h - 0.05 * g for h, g in zip(hiddens, gradients)]
     residual = hiddens[0] - (x @ weights[0].T)
-    expected = alpha * residual
-    np.testing.assert_allclose(result.multipliers[0], expected)
+    np.testing.assert_allclose(multipliers[0], alpha * residual)
+
+    # T = 2 is that primal-dual sweep plus a final primal sweep, which does
+    # not write λ again. infer must return the multiplier the sweep wrote.
+    result = infer(
+        weights, x, y, activation="identity", T=2, eta_h=eta_h, alpha=alpha, rho=rho
+    )
+    np.testing.assert_allclose(result.multipliers[0], multipliers[0])
+
+    chain = Network((2, 3, 4, 2), activation="tanh", seed=2, init_scale=0.2)
+    rng = np.random.default_rng(3)
+    batch_x = rng.normal(size=(3, 2))
+    batch_y = rng.normal(size=(3, 2))
+    hiddens, multipliers = forward_sweep(
+        chain.weights,
+        batch_x,
+        "tanh",
+        y=batch_y,
+        alpha=alpha,
+        rho=rho,
+        update_multipliers=True,
+    )
+    hiddens, multipliers = forward_sweep(
+        chain.weights,
+        batch_x,
+        "tanh",
+        hiddens=hiddens,
+        multipliers=multipliers,
+        y=batch_y,
+        eta_h=eta_h,
+        alpha=alpha,
+        rho=rho,
+        update_activities=True,
+        update_multipliers=True,
+    )
+    for multiplier, residual in zip(
+        multipliers, layer_residuals(chain.weights, hiddens, batch_x, "tanh")
+    ):
+        np.testing.assert_allclose(multiplier, alpha * residual)
 
 
 def test_one_primal_step_decreases_the_augmented_lagrangian():

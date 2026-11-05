@@ -5,10 +5,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from lpc.energy import (
-    activity_gradients,
     as_batch,
     augmented_lagrangian,
-    forward_hiddens,
+    forward_sweep,
     layer_residuals,
     validate_weights,
 )
@@ -26,43 +25,59 @@ class InferenceResult:
 
 
 def infer(weights, x, y, activation, T, eta_h, alpha, rho):
-    """Run Algorithm 1 lines 4–10 for one batch.
+    """Run Algorithm 1 for one batch, with the dual step inside the forward sweep.
 
-    Hidden states are initialized on the forward pass and every multiplier
-    starts at 0. The loop then takes T-1 primal-dual cycles
+    Every iteration is one input-to-output sweep. The first sweep writes the
+    feasible activities h_i = σ(W_i h_{i-1}) and applies λ ← λ + α r to a zero
+    residual, so each multiplier starts at 0. The next T - 1 sweeps take a
+    primal step and, in that same layer loop, the dual step
 
-        h ← h - η_h ∇_h L_ρ
-        λ ← λ + α (h - σ(W h_prev))
+        λ ← λ + α r,    r = h - σ(W h_prev)
 
-    and one final primal step with no trailing dual update. The dual step
-    uses the residual of the updated activities, matching equation (16).
-    Multipliers are inference state: they are not kept across calls.
+    using the residual of the activities just written and the combined signal
+    c = λ + ρ r inside ∇_h L_ρ. The last sweep is primal only. Multipliers are
+    inference state: they are not kept across calls.
     """
     if T < 1:
         raise ValueError("inference budget T must be at least 1")
     x, y = as_batch(x, y)
     validate_weights(weights, x, y)
-    hiddens = forward_hiddens(weights, x, activation)
-    multipliers = [np.zeros_like(hidden) for hidden in hiddens]
-    for _ in range(T - 1):
-        gradients = activity_gradients(
-            weights, hiddens, multipliers, x, y, rho, activation
-        )
-        hiddens = [
-            hidden - eta_h * gradient
-            for hidden, gradient in zip(hiddens, gradients)
-        ]
-        residuals = layer_residuals(weights, hiddens, x, activation)
-        multipliers = [
-            multiplier + alpha * residual
-            for multiplier, residual in zip(multipliers, residuals)
-        ]
-    gradients = activity_gradients(
-        weights, hiddens, multipliers, x, y, rho, activation
+    hiddens, multipliers = forward_sweep(
+        weights,
+        x,
+        activation,
+        y=y,
+        alpha=alpha,
+        rho=rho,
+        update_multipliers=True,
     )
-    hiddens = [
-        hidden - eta_h * gradient for hidden, gradient in zip(hiddens, gradients)
-    ]
+    for _ in range(T - 1):
+        hiddens, multipliers = forward_sweep(
+            weights,
+            x,
+            activation,
+            hiddens=hiddens,
+            multipliers=multipliers,
+            y=y,
+            eta_h=eta_h,
+            alpha=alpha,
+            rho=rho,
+            update_activities=True,
+            update_multipliers=True,
+        )
+    hiddens, multipliers = forward_sweep(
+        weights,
+        x,
+        activation,
+        hiddens=hiddens,
+        multipliers=multipliers,
+        y=y,
+        eta_h=eta_h,
+        alpha=alpha,
+        rho=rho,
+        update_activities=True,
+        update_multipliers=False,
+    )
     residuals = layer_residuals(weights, hiddens, x, activation)
     energy = augmented_lagrangian(
         weights, hiddens, multipliers, x, y, rho, activation

@@ -7,6 +7,8 @@ from lpc.inference import infer
 def train_step(weights, x, y, activation, T, eta_h, alpha, rho, eta_theta):
     """One batch: infer, then descend on ∇_W L_ρ averaged over the batch.
 
+    Inference updates each λ inside its forward sweep (λ ← λ + α r). The
+    weight step reads those multipliers, so training uses the same schedule.
     Weights are updated in place. Returns the inference state that produced
     the weight gradient.
     """

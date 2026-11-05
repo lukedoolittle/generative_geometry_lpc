@@ -55,18 +55,80 @@ def validate_weights(weights, x, y):
 
 
 def forward_hiddens(weights, x, activation):
-    """Forward pass h_i = σ(W_i h_{i-1}) for i = 1..L-1. h_0 = x is clamped.
+    """Feasible activities h_i = σ(W_i h_{i-1}) for i = 1..L-1.
 
-    Returns the free hidden states only. This is the initialization in
-    Algorithm 1 and the feasible point of the constraints in equation (1).
-    The readout is linear and is not included.
+    Returns the free hidden states only. This is the feasible point of the
+    constraints in equation (1). The readout is linear and is not included.
+    Inference does not call this on its own: ``forward_sweep`` writes these
+    activities and updates each layer's multiplier in the same pass.
     """
-    hiddens = []
-    previous = x
-    for weight in weights[:-1]:
-        previous = sigma(activation, previous @ weight.T)
-        hiddens.append(previous)
+    hiddens, _multipliers = forward_sweep(weights, x, activation)
     return hiddens
+
+
+def forward_sweep(
+    weights,
+    x,
+    activation,
+    hiddens=None,
+    multipliers=None,
+    y=None,
+    eta_h=0.0,
+    alpha=0.0,
+    rho=0.0,
+    update_activities=False,
+    update_multipliers=False,
+):
+    """One input-to-output sweep. Each layer's λ is updated as its activity is written.
+
+    Layers run from the clamped input toward the readout. For layer i the
+    sweep writes h_i, forms the same residual the dual step has always used,
+
+        r_i = h_i - σ(W_i h_{i-1}),
+
+    and, when ``update_multipliers`` is set, immediately applies
+
+        λ_i ← λ_i + α r_i.
+
+    h_{i-1} is the activity this sweep has already committed, so the residual
+    matches ``layer_residuals`` on the activities the sweep returns. The
+    activity gradient uses the augmented-Lagrangian combined signal
+    c = λ + ρ r. Those gradients are taken from the state at the start of the
+    sweep, then this loop commits h and λ from the bottom up.
+
+    On the feasible initialization, ``update_activities`` is false, h_i is
+    σ(W_i h_{i-1}), and r_i is 0, so the dual step leaves λ at its incoming
+    value (zero when ``multipliers`` is omitted).
+    """
+    if update_activities:
+        gradients = activity_gradients(
+            weights, hiddens, multipliers, x, y, rho, activation
+        )
+    else:
+        gradients = None
+
+    previous = x
+    new_hiddens = []
+    new_multipliers = []
+    for index, weight in enumerate(weights[:-1]):
+        activated = sigma(activation, previous @ weight.T)
+        if update_activities:
+            activity = hiddens[index] - eta_h * gradients[index]
+            multiplier = multipliers[index]
+        else:
+            activity = activated
+            if multipliers is None:
+                multiplier = np.zeros_like(activity)
+            else:
+                multiplier = multipliers[index]
+        # Same residual and dual step as the former post-sweep update in infer.
+        residual = activity - activated
+        if update_multipliers:
+            multiplier = multiplier + alpha * residual
+        new_hiddens.append(activity)
+        new_multipliers.append(multiplier)
+        previous = activity
+    return new_hiddens, new_multipliers
 
 
 def predict(weights, x, activation):
