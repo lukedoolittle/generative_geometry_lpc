@@ -24,6 +24,23 @@ python -m lpc
 That command also runs inference on a held-out batch and prints the forward
 MSE, the Lagrangian, and the constraint residual.
 
+## Fashion-MNIST
+
+A second command trains the same chain on a stratified slice of Fashion-MNIST.
+Targets are one-hot class vectors, so the supervised term stays mean squared
+error. Accuracy is the argmax of the linear readout. A backprop network with
+the same sizes, initialization, step count, and step size is trained on that
+same slice.
+
+```bash
+python -m lpc.fashion
+```
+
+The slice is 200 training images and 100 test images from each class (2000
+and 1000). Pixels are 28×28, scaled to `[0, 1]`, and flattened. The network
+is `(784, 64, 10)` with `tanh`. The files are downloaded into
+`data/fashion-mnist` on the first run. `python -m lpc` does not use them.
+
 From Python, one Algorithm 1 pass is `Network.train`. `T` is the inference
 budget, `eta_h` the primal step size, `alpha` the dual rate, `rho` the penalty,
 and `eta_theta` the weight step size. Multipliers are reset to zero on every
