@@ -28,9 +28,10 @@ MSE, the Lagrangian, and the constraint residual.
 
 A second command trains the same chain on a stratified slice of Fashion-MNIST.
 Targets are one-hot class vectors, so the supervised term stays mean squared
-error. Accuracy is the argmax of the linear readout. A backprop network with
-the same sizes, initialization, step count, and step size is trained on that
-same slice.
+error. Accuracy is the argmax of the linear readout. Two backprop networks
+with the same sizes, initialization, step count, and step size are trained
+on that same slice: one in NumPy, and the same update in PyTorch (`nn.Linear`
+with `bias=False`, float64 SGD on the batch mean of `1/2 ||y − ŷ||^2`).
 
 ```bash
 python -m lpc.fashion

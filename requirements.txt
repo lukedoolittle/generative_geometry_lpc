@@ -1,3 +1,5 @@
 # NumPy 2's Accelerate matmul warns on this machine; 1.26 is the last 1.x release.
 numpy>=1.24,<2
 pytest
+# 2.8 is the last PyTorch release that installs on Python 3.9.
+torch>=2.2,<2.9
